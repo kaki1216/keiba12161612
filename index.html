@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#111827">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icon.svg">
+<link rel="apple-touch-icon" href="./icon.svg">
+<title>競馬 荒れ予測</title>
+<style>
+:root{
+ --bg:#0f1419; --fg:#e8eaed; --mut:#8b949e; --card:#161b22; --in:#1c232c; --bd:#2d3742; --pri:#22c55e; --err:#ef4444;
+}
+@media (prefers-color-scheme:light){
+ :root{--bg:#fff; --fg:#111827; --mut:#6b7280; --card:#f9fafb; --in:#f3f4f6; --bd:#e5e7eb; --pri:#16a34a; --err:#dc2626}
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+ background:var(--bg); color:var(--fg);
+ font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",Inter,sans-serif;
+ font-size:14px; line-height:1.5;
+ -webkit-text-size-adjust:100%;
+ -webkit-tap-highlight-color:transparent;
+ padding-bottom:calc(56px + env(safe-area-inset-bottom));
+ overscroll-behavior-y:contain;
+}
+#app{max-width:520px;margin:0 auto}
+header{
+ display:flex;align-items:center;justify-content:space-between;
+ padding:calc(10px + env(safe-area-inset-top)) 12px 10px;
+ border-bottom:1px solid var(--bd);
+ position:sticky;top:0;background:var(--bg);z-index:10;
+}
+h1{font-size:15px;font-weight:500;margin:0}
+.sub{font-size:11px;color:var(--mut)}
+#banner{display:none;padding:8px 12px;background:var(--card);font-size:12px}
+section{padding:12px}
+textarea,input[type=date]{
+ width:100%;padding:10px;font-size:16px;
+ background:var(--in);color:var(--fg);border:1px solid var(--bd);border-radius:8px;
+}
+textarea{height:150px;font-family:ui-monospace,Menlo,monospace;font-size:13px;line-height:1.5;resize:vertical}
+input[type=date]{height:44px}
+button{font-family:inherit;font-size:14px;cursor:pointer}
+.btn{height:44px;border-radius:8px;border:1px solid var(--bd);background:transparent;color:var(--fg);width:100%;margin-bottom:8px}
+.btn.pri{background:var(--pri);color:#fff;border:0;font-weight:500}
+.row{display:flex;gap:8px;margin-top:8px}
+.row .btn{margin:0}
+.h{font-size:13px;font-weight:500;margin:20px 0 6px}
+.note{font-size:11px;color:var(--mut);margin-bottom:8px}
+.item{display:flex;justify-content:space-between;align-items:center;padding:12px 4px;border-bottom:1px solid var(--bd);font-size:13px}
+.mut{color:var(--mut)}
+nav{
+ position:fixed;bottom:0;left:0;right:0;display:flex;
+ border-top:1px solid var(--bd);background:var(--bg);
+ padding-bottom:env(safe-area-inset-bottom);z-index:20;
+}
+nav button{
+ flex:1;height:56px;border:0;background:transparent;color:var(--mut);font-size:11px;
+}
+nav button.on{color:var(--pri);font-weight:500}
+</style>
+</head>
+<body>
+<div id="app">
+
+<header>
+  <div>
+    <h1>競馬 荒れ予測</h1>
+    <div id="hdrSub" class="sub">v1.0.0 / 読込中</div>
+  </div>
+  <div id="hdrArare" class="sub" style="text-align:right"></div>
+</header>
+
+<div id="banner"></div>
+
+<section id="t-collect">
+  <div class="note">結果テキストを貼り付けて取込。1レース1ブロックで、日付行→レース行→着順行の順。</div>
+  <textarea id="inp" placeholder="2026/7/26 新潟(芝不/ダ不) 天:雨
+ 芝1000 未勝利 16 3連単356000 ラップ11.8-10.9-11.2
+ 1着 12番 11人気 単58.4 上3F34.1 通過3-1 牝3 54.0 佐々木/美浦 父ダイワメジャー/母父クロフネ"></textarea>
+  <div class="row">
+    <button class="btn pri" onclick="doImport()">取込</button>
+    <button class="btn" onclick="document.getElementById('inp').value=''">消去</button>
+  </div>
+  <div id="impMsg" class="note"></div>
+  <div class="h">取込済み</div>
+  <div id="stat" class="note"></div>
+</section>
+
+<section id="t-agg" style="display:none">
+  <div class="h" style="margin-top:0">荒れ指数（場×コース×距離帯）</div>
+  <div class="note">n&lt;5 は推定値。n≥5 で実測に置換。</div>
+  <div id="acTable"></div>
+  <div class="h">種牡馬別 大穴率</div>
+  <div class="note">7人気以下の馬券内率。n≥5 のみ。</div>
+  <div id="sireTable"></div>
+  <div class="h">馬場別 3連単中央値</div>
+  <div id="babaTable"></div>
+</section>
+
+<section id="t-pred" style="display:none">
+  <div class="h" style="margin-top:0">当日レース表</div>
+  <div class="row" style="margin-top:0">
+    <input id="dlDate" type="date">
+    <button class="btn pri" onclick="fetchDay()">取得</button>
+  </div>
+  <div id="dayMsg" class="note"></div>
+  <div id="dayList"></div>
+  <div class="h">出走馬スコア</div>
+  <div id="predBox" class="note">レースを選ぶと計算します。</div>
+  <div id="betBox"></div>
+</section>
+
+<section id="t-cfg" style="display:none">
+  <button class="btn" onclick="exportJSON()">バックアップ書き出し</button>
+  <input id="impFile" type="file" accept=".json" onchange="importJSON(this)" style="display:none">
+  <button class="btn" onclick="document.getElementById('impFile').click()">バックアップ復元</button>
+  <button class="btn" onclick="askPersist()">ストレージを永続化</button>
+  <button class="btn" onclick="wipe()" style="color:var(--err)">全データ消去</button>
+  <div id="cfgInfo" class="note"></div>
+</section>
+
+<nav>
+  <button id="n-collect" class="on" onclick="tab('collect')">収集</button>
+  <button id="n-agg" onclick="tab('agg')">集計</button>
+  <button id="n-pred" onclick="tab('pred')">予想</button>
+  <button id="n-cfg" onclick="tab('cfg')">設定</button>
+</nav>
+</div>
+
+<script>
+const VEN=['札幌','函館','福島','新潟','中山','東京','中京','京都','阪神','小倉'];
+const CLS=['新馬','未勝利','1勝','2勝','3勝','OP','リステッド','G3','G2','G1'];
+const BABA={'良':.35,'稍重':.55,'重':.95,'不良':1.25};
+const BMUL={'中山|芝|重':1.15,'中山|芝|不良':1.30,'中山|ダ|不良':1.10,'京都|ダ|不良':.80};
+const CLSC={'新馬':1,'未勝利':.9,'1勝':.6,'2勝':.55,'3勝':.5,'OP':.45,'リステッド':.45,'G3':.4,'G2':.35,'G1':.3};
+const BFIT={'良':.5,'万能':.6,'道悪':.9};
+const VF={'新潟':1.10,'中山':1.05,'小倉':1.05,'函館':1.0,'福島':1.0,'中京':1.0,'京都':1.0,'東京':.95,'阪神':.95,'札幌':.95};
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const band=d=>d<=1400?'短':d<=2400?'中':'長';
+const bk=(v,s,d)=>v+'|'+s+'|'+band(d);
+
+let DB=null;
+function openDB(){return new Promise((res,rej)=>{const r=indexedDB.open('keiba',1);
+ r.onupgradeneeded=e=>{const d=e.target.result;
+  if(!d.objectStoreNames.contains('races'))d.createObjectStore('races',{keyPath:'id'});
+  if(!d.objectStoreNames.contains('meta'))d.createObjectStore('meta',{keyPath:'k'});};
+ r.onsuccess=e=>{DB=e.target.result;res()};r.onerror=e=>rej(e)})}
+const tx=(s,m)=>DB.transaction(s,m).objectStore(s);
+const dbAll=s=>new Promise((res,rej)=>{const r=tx(s,'readonly').getAll();r.onsuccess=()=>res(r.result);r.onerror=rej});
+const dbPut=(s,v)=>new Promise((res,rej)=>{const r=tx(s,'readwrite').put(v);r.onsuccess=res;r.onerror=rej});
+const dbClear=s=>new Promise((res,rej)=>{const r=tx(s,'readwrite').clear();r.onsuccess=res;r.onerror=rej});
+
+let RACES=[];
+async function load(){RACES=await dbAll('races');refresh()}
+
+function parse(txt){
+ const out=[];let cur=null,race=null;
+ txt.split(/\r?\n/).forEach(raw=>{
+  const L=raw.trim();if(!L)return;
+  const h=L.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})\s+(\S+?)\(([^)]*)\)(?:\s+天:(\S+))?$/);
+  if(h){cur={date:`${h[1]}/${+h[2]}/${+h[3]}`,ven:h[4],tag:h[5],weather:h[6]||null,races:[]};out.push(cur);return}
+  if(!cur)return;
+  const r=L.match(/^(障|芝|ダ)(\d+)\s+(\S+)\s+(\d+)\s+3連単(\d+)(?:\s+ラップ([\d\.\-]+))?/);
+  if(r){race={surface:r[1],dist:+r[2],cls:normCls(r[3]),heads:+r[4],payout:+r[5],lap:r[6]?r[6].split('-').map(Number):[],horses:[]};cur.races.push(race);return}
+  const o=L.match(/^(\d+)着\s+(\d+)番\s+(\d+)人気\s+単([\d\.]+)\s+上3F([\d\.]+)\s+通過(\S+)\s+(\S+?)(\d+)\s+([\d\.]+)\s+(\S+)\/(\S+)\s+(\S+)\/(\S+)/);
+  if(o&&race){race.horses.push({fin:+o[1],num:+o[2],pop:+o[3],odds:+o[4],agari:+o[5],corner:o[6],sex:o[7],age:+o[8],weight:+o[9],jockey:o[10],trainer:o[11],sire:o[12],damsire:o[13]})}
+ });
+ out.forEach(g=>{const m=g.tag.match(/芝([良稍重不]+)/);const n=g.tag.match(/ダ([良稍重不]+)/);
+  g.surface_baba={芝:m?fixB(m[1]):null,'ダ':n?fixB(n[1]):null};g.whole=!m&&!n?fixB(g.tag):null});
+ return out}
+const fixB=t=>t==='不'?'不良':t.startsWith('不')?'不良':t;
+function normCls(c){if(c==='L'||/リステッド/.test(c))return'リステッド';if(/^G[123]$/.test(c))return c;if(CLS.includes(c))return c;return'未勝利'}
+
+async function doImport(){
+ const txt=document.getElementById('inp').value;
+ const groups=parse(txt);let n=0;
+ for(const g of groups){
+  for(let i=0;i<g.races.length;i++){
+   const r=g.races[i];
+   const baba=g.surface_baba[r.surface]||g.whole||null;
+   const id=g.date+'|'+g.ven+'|'+r.surface+r.dist+'|'+i;
+   await dbPut('races',{id,date:g.date,ven:g.ven,surface:r.surface,dist:r.dist,cls:r.cls,heads:r.heads,payout:r.payout,lap:r.lap,horses:r.horses,baba,weather:g.weather});
+   n++}}
+ document.getElementById('inp').value='';
+ document.getElementById('impMsg').textContent=n?`${n}レース取込`:'解釈できる行がありません';
+ await load();
+}
+
+function acBase(ven,s,d){
+ const f=(VF[ven]||1)*(s==='芝'?1:s==='ダ'?1:.9);
+ const b=band(d)==='短'?1.05:band(d)==='長'?1.10:1;
+ return clamp(.55*f*b,.1,1.3)}
+function acCalc(){
+ const m={};const add=(k,v)=>{if(!m[k])m[k]={n:0,lg:[]};m[k].n++;m[k].lg.push(Math.log10(v))};
+ RACES.forEach(r=>{if(!r.payout||r.surface==='障')return;add(bk(r.ven,r.surface,r.dist),r.payout)});
+ const out={};
+ Object.keys(m).forEach(k=>{const e=m[k];const avg=e.lg.reduce((a,b)=>a+b,0)/e.lg.length;
+  e.ac=clamp(.6*Math.pow(10,avg-4.6),.1,1.3)});
+ const good=RACES.filter(r=>r.baba==='良'&&r.payout&&r.surface!=='障');
+ const gBy={};good.forEach(r=>{const k=bk(r.ven,r.surface,r.dist);(gBy[k]=gBy[k]||[]).push(Math.log10(r.payout))});
+ Object.keys(m).forEach(k=>{const e=m[k];
+  if(e.n>=5){out[k]={ac:e.ac,n:e.n,src:'実測'};return}
+  const gb=gBy[k];
+  if(gb&&gb.length>=5){const a=gb.reduce((x,y)=>x+y,0)/gb.length;out[k]={ac:clamp(.6*Math.pow(10,a-4.6),.1,1.3),n:e.n,src:'良代替'};return}
+  const p=k.split('|');out[k]={ac:acBase(p[0],p[1],p[2]==='短'?1400:p[2]==='長'?2500:2000),n:e.n,src:'推定'}});
+ return out}
+
+let ACMAP={};
+function refresh(){
+ ACMAP=acCalc();
+ const total=RACES.length;
+ const horses=RACES.reduce((a,r)=>a+r.horses.length,0);
+ document.getElementById('hdrSub').textContent='v1.0.0 / '+total+'レース';
+ document.getElementById('stat').innerHTML=total?`レース ${total} / 馬 ${horses}<br>最終更新 ${new Date().toLocaleString('ja-JP')}`:'データなし';
+ const rows=Object.keys(ACMAP).sort((a,b)=>b.localeCompare(a)).slice(0,40).map(k=>{
+  const p=k.split('|');const e=ACMAP[k];
+  const col=e.src==='実測'?'var(--fg)':'var(--mut)';
+  return `<div class="item" style="color:${col}"><span>${p[0]} ${p[1]}${p[2]}</span><span>${e.ac.toFixed(2)} <span class="mut">n${e.n} ${e.src}</span></span></div>`}).join('');
+ document.getElementById('acTable').innerHTML=rows||'<div class="note">なし</div>';
+ const sm={};
+ RACES.forEach(r=>r.horses.forEach(h=>{if(!h.sire)return;if(!sm[h.sire])sm[h.sire]={t:0,i:0};if(h.pop>=7){sm[h.sire].t++;if(h.fin<=3)sm[h.sire].i++}}));
+ const srows=Object.entries(sm).filter(([,v])=>v.t>=5).map(([k,v])=>[k,v.i/v.t,v.t])
+  .sort((a,b)=>b[1]-a[1]).slice(0,25)
+  .map(([k,v,t])=>`<div class="item"><span>${k}</span><span>${(v*100).toFixed(0)}% <span class="mut">${t}走</span></span></div>`).join('');
+ document.getElementById('sireTable').innerHTML=srows||'<div class="note">n≥5 なし</div>';
+ const bm={};RACES.forEach(r=>{if(!r.baba)return;(bm[r.baba]=bm[r.baba]||[]).push(r.payout)});
+ document.getElementById('babaTable').innerHTML=Object.keys(BABA).map(b=>{
+  const a=(bm[b]||[]).sort((x,y)=>x-y);const med=a.length?a[Math.floor(a.length/2)]:null;
+  return `<div class="item"><span>${b}</span><span>${med?med.toLocaleString()+'円':'-'} <span class="mut">n${a.length}</span></span></div>`}).join('');
+ const last=localStorage.getItem('kb_backup');
+ if(RACES.length&&(!last||Date.now()-+last>2592e5)){document.getElementById('banner').style.display='block';
+  document.getElementById('banner').textContent='バックアップから3日以上経過。設定から書き出してください。'}
+ document.getElementById('cfgInfo').textContent='レース '+RACES.length+'件 / 最終バックアップ '+(last?new Date(+last).toLocaleString('ja-JP'):'未実施');
+}
+
+let DAY=[];
+async function fetchDay(){
+ const d=document.getElementById('dlDate').value.replace(/-/g,'');
+ if(!d)return;
+ document.getElementById('dayMsg').textContent='取得中...';
+ const u='https://race.netkeiba.com/race/race_list.html?kaisai_date='+d;
+ try{
+  const res=await fetch('https://api.allorigins.win/raw?url='+encodeURIComponent(u));
+  const buf=await res.arrayBuffer();
+  const html=new TextDecoder('shift_jis').decode(buf);
+  DAY=parseList(html,d);
+  document.getElementById('dayMsg').textContent=DAY.length?DAY.length+'レース取得':'解析0件（ページ構造変更の可能性）';
+  renderDay();
+ }catch(e){document.getElementById('dayMsg').textContent='取得失敗: '+e.message}
+}
+function parseList(html,d){
+ const out=[];const date=d.slice(0,4)+'/'+(+d.slice(4,6))+'/'+(+d.slice(6,8));
+ const blocks=html.split(/RaceList_DataTitle/);
+ blocks.forEach(b=>{
+  const vn=(b.match(/(札幌|函館|福島|新潟|中山|東京|中京|京都|阪神|小倉)/)||[])[1];
+  if(!vn)return;
+  const w=(b.match(/芝\(([^)]*)\)：(\S+)\s*ダ：(\S+)/)||[]);
+  const surfB={'芝':w[2]||null,'ダ':w[3]||null};
+  const re=/race_id=(\d{12})[^>]*>\s*([^<]*?)\s*<\/a>[\s\S]{0,400}?(障|芝|ダ)(\d{4})/g;
+  let m;
+  while((m=re.exec(b))){
+   const rc=m[2].trim()||'?';
+   out.push({id:m[1],date,ven:vn,no:rc,surface:m[3],dist:+m[4],baba:surfB[m[3]]||null});
+  }
+ });
+ return out.filter((x,i,a)=>a.findIndex(y=>y.id===x.id)===i);
+}
+function renderDay(){
+ document.getElementById('dayList').innerHTML=DAY.map(r=>{
+  const b=r.baba?fixB(r.baba):'-';
+  return `<div class="item" onclick="pick('${r.id}')"><span>${r.ven} ${r.no}R ${r.surface}${r.dist}</span><span class="mut">${b}</span></div>`}).join('');
+}
+function pick(id){
+ const r=DAY.find(x=>x.id===id);if(!r)return;
+ const ac=(ACMAP[bk(r.ven,r.surface,r.dist)]||{}).ac||acBase(r.ven,r.surface,r.dist);
+ const bm=BMUL[r.ven+'|'+r.surface+'|'+(r.baba?fixB(r.baba):'')]||1;
+ const bv=BABA[r.baba?fixB(r.baba):'良']||.35;
+ const ar=clamp(100*(.28*ac+.20*bv*bm+.14*(CLSC['未勝利']||.9)+.10*.5+.16*.5+.12*.5),0,100);
+ const pts=ar>=70?32:ar>=55?24:ar>=40?18:12;
+ document.getElementById('predBox').innerHTML=`<div class="note">${r.ven} ${r.no}R ${r.surface}${r.dist} / 馬場 ${r.baba||'-'}</div>
+  <div style="font-size:26px;font-weight:500">荒れ ${ar.toFixed(0)}</div>
+  <div class="note">AC ${ac.toFixed(2)} / 馬場 ${(bv*bm).toFixed(2)}</div>`;
+ document.getElementById('betBox').innerHTML=`<div style="margin-top:12px;padding:10px;border:1px solid var(--bd);border-radius:8px;font-size:12px">
+  <div style="font-weight:500;margin-bottom:4px">推奨 3連単フォーメーション ${pts}点</div>
+  <div class="mut" style="line-height:1.7">1着 ${ar>=70?4:3}頭 / 2着 ${ar>=70?6:5}頭 / 3着 ${ar>=70?8:6}頭<br>軸はスコア上位、相手は血統スコア加点順。</div></div>`;
+}
+
+function exportJSON(){
+ const blob=new Blob([JSON.stringify({v:1,races:RACES})],{type:'application/json'});
+ const f=new File([blob],'keiba_backup_'+Date.now()+'.json',{type:'application/json'});
+ if(navigator.canShare&&navigator.canShare({files:[f]})){navigator.share({files:[f],title:'keiba backup'}).then(done).catch(done)}
+ else{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=f.name;a.click();done()}
+ function done(){localStorage.setItem('kb_backup',Date.now());refresh()}
+}
+function importJSON(inp){
+ const f=inp.files[0];if(!f)return;const fr=new FileReader();
+ fr.onload=async()=>{try{const j=JSON.parse(fr.result);for(const r of (j.races||[]))await dbPut('races',r);await load()}catch(e){alert('読めません: '+e.message)}};
+ fr.readAsText(f)}
+async function askPersist(){if(navigator.storage&&navigator.storage.persist){const ok=await navigator.storage.persist();document.getElementById('cfgInfo').textContent='永続化: '+(ok?'許可':'拒否')}}
+async function wipe(){if(!confirm('全データを消します'))return;await dbClear('races');await load()}
+function tab(k){
+ ['collect','agg','pred','cfg'].forEach(x=>{
+  document.getElementById('t-'+x).style.display=x===k?'block':'none';
+  document.getElementById('n-'+x).className=x===k?'on':''})}
+
+(async()=>{
+ await openDB();
+ document.getElementById('dlDate').value=new Date().toISOString().slice(0,10);
+ await load();
+ if(!RACES.length)await demo();
+ if('serviceWorker' in navigator){try{await navigator.serviceWorker.register('./sw.js')}catch(e){}}
+})();
+
+async function demo(){
+ const t=`2026/7/26 新潟(芝不/ダ不) 天:雨
+ 芝1000 未勝利 16 3連単356000 ラップ11.8-10.9-11.2
+ 1着 12番 11人気 単58.4 上3F34.1 通過3-1 牝3 54.0 佐々木/美浦 父ダイワメジャー/母父クロフネ
+ 2着 4番 3人気 単4.2 上3F34.3 通過1-1 牡3 56.0 戸崎/美浦 父ロードカナロア/母父キングカメハメハ
+ 3着 9番 6人気 単12.8 上3F34.0 通過5-4 牡3 55.0 横山武/栗東 父ミッキーアイル/母父ディープインパクト
+ 芝1400 1勝 13 3連単2129880 ラップ12.1-11.0-11.4-12.0
+ 1着 7番 13人気 単88.2 上3F34.8 通過8-6 牡4 56.0 丸山/美浦 父シニスターミニスター/母父アドマイヤベガ
+ 2着 2番 1人気 単2.1 上3F34.2 通過2-2 牡4 57.0 戸崎/美浦 父キズナ/母父ハーツクライ
+ 3着 11番 9人気 単31.5 上3F34.5 通過5-5 牝4 54.0 石川/美浦 父ダノンレジェンド/母父フレンチデピュティ`;
+ document.getElementById('inp').value=t;await doImport();
+}
+</script>
+</body>
+</html>
